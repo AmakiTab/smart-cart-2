@@ -3,174 +3,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Cart AI Scanner</title>
-    <script src="edge-impulse-standalone.js"></script>
-    <script src="run-impulse.js"></script>
+    <title>AI Smart Cart Interface</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
-        .container { max-width: 450px; margin: auto; background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        video { width: 100%; border-radius: 15px; margin: 15px 0; display: none; border: 3px solid #007bff; }
-        .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; min-height: 32px; }
-        .confidence-list { text-align: left; font-family: monospace; background: #e9ecef; padding: 15px; border-radius: 10px; font-size: 14px; line-height: 1.6; }
-        input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; background: #f4f7f6; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         
-        button { width: 100%; padding: 15px; background: #007bff; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
-        button:active { background: #0056b3; }
-        .btn-add { background: #28a745; display: none; margin-top: 10px; }
-        .btn-remove { background: #dc3545; }
+        #video-container { position: relative; width: 100%; height: 300px; background: #000; border-radius: 10px; overflow: hidden; margin-bottom: 20px; }
+        video { width: 100%; height: 100%; object-fit: cover; }
         
-        #log { color: #28a745; font-weight: bold; margin-top: 10px; height: 20px; }
-        .bar-container { background: #ddd; height: 8px; border-radius: 4px; margin-top: 4px; margin-bottom: 8px; overflow: hidden; }
-        .bar-fill { background: #007bff; height: 100%; transition: width 0.2s; }
-        .action-area { margin: 20px 0; padding-top: 10px; border-top: 2px solid #eee; }
+        .controls { display: flex; flex-direction: column; gap: 10px; }
+        input { padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 15px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; font-size: 16px; }
+        
+        #addBtn { background: #28a745; color: white; }
+        #removeBtn { background: #dc3545; color: white; }
+        button:hover { opacity: 0.8; }
+        
+        #logDisplay { margin-top: 20px; font-weight: bold; padding: 10px; border-radius: 5px; min-height: 24px; }
+        .status-box { font-size: 0.9em; color: #666; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>🛒 Smart Cart AI</h2>
-    <input type="text" id="espIp" placeholder="Enter ESP32 IP">
-    <button id="startBtn">Start Inferencing...</button>
+    <h2>🛒 AI Smart Cart</h2>
     
-    <video id="webcam" autoplay muted playsinline></video>
-    <div id="top-result" class="inference-display">Ready...</div>
-    
-    <div class="action-area">
-        <button id="addBtn" class="btn-add">➕ Add Detected Item</button>
-        <button id="removeBtn" class="btn-remove">🔄 Remove Last Item</button>
+    <div class="status-box">
+        IP: <input type="text" id="espIp" placeholder="e.g. 192.168.1.50" value="">
     </div>
 
-    <div id="conf-list" class="confidence-list"></div>
-    <div id="log">Last Scanned: None</div>
+    <div id="video-container">
+        <video id="webcam" autoplay muted playsinline></video>
+    </div>
+
+    <div class="controls">
+        <div id="logDisplay">Waiting for camera...</div>
+        
+        <div class="btn-group">
+            <button id="addBtn">➕ ADD ITEM</button>
+            <button id="removeBtn">🗑️ REMOVE ITEM</button>
+        </div>
+    </div>
 </div>
 
 <script>
-    let classifier;
-    let currentDetectedItem = null;
-    let lastAddedItem = null;
-    const targets = ["Deodorant", "Grips", "Hot sauce", "Power bank"];
-
+    // --- VARIABLES ---
+    const video = document.getElementById('webcam');
+    const logDisplay = document.getElementById('logDisplay');
     const addBtn = document.getElementById('addBtn');
     const removeBtn = document.getElementById('removeBtn');
-    const logDisplay = document.getElementById('log');
 
-    document.getElementById('startBtn').onclick = async () => {
-        document.getElementById('startBtn').style.display = 'none';
-        await initAI();
-    };
+    let currentDetectedItem = null; // This would be updated by your AI Model
+    let lastAddedItem = null;
 
-    addBtn.onclick = () => { if (currentDetectedItem) sendToCart(currentDetectedItem, 'add'); };
-    removeBtn.onclick = () => {
-        if (lastAddedItem) sendToCart(lastAddedItem, 'remove');
-        else { logDisplay.innerText = "Nothing to remove!"; logDisplay.style.color = "#dc3545"; }
-    };
-
-    async function initAI() {
-        const statusDisplay = document.getElementById('top-result');
+    // --- SETUP CAMERA ---
+    async function setupCamera() {
         try {
-            statusDisplay.innerText = "Loading AI...";
-            classifier = new EdgeImpulseClassifier();
-            await classifier.init();
-            
-            const props = classifier.getProperties();
-            const video = document.getElementById('webcam');
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } } 
-            });
-            
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             video.srcObject = stream;
-            video.style.display = 'block';
-
-            video.onloadedmetadata = () => {
-                video.play();
-                statusDisplay.innerText = "Searching...";
-                setInterval(async () => {
-                    const imgData = getPixelData(video, props.input_width, props.input_height);
-                    const result = await classifier.classify(imgData);
-                    if (result.results) {
-                        updateUI(result.results);
-                        checkDetection(result.results);
-                    }
-                }, 600);
-            };
-        } catch (e) { statusDisplay.innerText = "AI Error: " + e.message; }
-    }
-
-    function getPixelData(video, targetW, targetH) {
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW; canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        const size = Math.min(video.videoWidth, video.videoHeight);
-        const xOffset = (video.videoWidth - size) / 2;
-        const yOffset = (video.videoHeight - size) / 2;
-        ctx.drawImage(video, xOffset, yOffset, size, size, 0, 0, targetW, targetH);
-        const img = ctx.getImageData(0, 0, targetW, targetH).data;
-        const pixels = [];
-        for (let i = 0; i < img.length; i += 4) { pixels.push(img[i], img[i+1], img[i+2]); }
-        return pixels;
-    }
-
-    function updateUI(classifications) {
-        const itemResults = classifications
-            .filter(res => targets.includes(res.label))
-            .sort((a, b) => b.value - a.value);
+            logDisplay.innerText = "Camera Ready. Scanning...";
             
-        const topItem = itemResults[0];
-        
-        // Always show the top target item regardless of confidence
-        if (topItem) {
-             document.getElementById('top-result').innerText = `${topItem.label} (${(topItem.value * 100).toFixed(0)}%)`;
-        } else {
-             document.getElementById('top-result').innerText = `Searching...`;
-        }
+            // SIMULATION: Every 3 seconds, "detect" a random item for testing
+            // Remove this once you integrate your real Object Detection model
+            const mockItems = ["Apple", "Bread", "Milk", "Grips"];
+            setInterval(() => {
+                currentDetectedItem = mockItems[Math.floor(Math.random() * mockItems.length)];
+                if (logDisplay.style.color !== "rgb(40, 167, 69)") { // Don't overwrite success messages immediately
+                    logDisplay.innerText = "Detected: " + currentDetectedItem;
+                    logDisplay.style.color = "#007bff";
+                }
+            }, 3000);
 
-        let listHtml = "";
-        classifications.sort((a, b) => b.value - a.value).forEach(res => {
-            const percent = (res.value * 100).toFixed(0);
-            const isTarget = targets.includes(res.label);
-            listHtml += `<div><span>${res.label}: ${percent}%</span>
-                <div class="bar-container"><div class="bar-fill" style="width: ${percent}%; background: ${isTarget ? "#007bff" : "#6c757d"};"></div></div></div>`;
-        });
-        document.getElementById('conf-list').innerHTML = listHtml;
-    }
-
-    function checkDetection(classifications) {
-        // Find the absolute highest scoring target item
-        const bestItem = classifications
-            .filter(res => targets.includes(res.label))
-            .sort((a, b) => b.value - a.value)[0];
-
-        // NO THRESHOLD: If an item exists in the list, show the button
-        if (bestItem) {
-            currentDetectedItem = bestItem.label;
-            addBtn.style.display = 'block';
-            addBtn.innerText = `➕ Add ${bestItem.label}`;
-        } else {
-            currentDetectedItem = null;
-            addBtn.style.display = 'none';
+        } catch (err) {
+            logDisplay.innerText = "Camera Access Denied";
+            logDisplay.style.color = "red";
         }
     }
+
+    // --- BUTTON LOGIC ---
+
+    addBtn.onclick = () => {
+        if (currentDetectedItem) {
+            sendToCart(currentDetectedItem, 'add');
+        } else {
+            logDisplay.innerText = "Looking for items...";
+        }
+    };
+
+    removeBtn.onclick = () => {
+        if (currentDetectedItem) {
+            sendToCart(currentDetectedItem, 'remove');
+        } else {
+            logDisplay.innerText = "Point camera at item to remove!";
+            logDisplay.style.color = "#dc3545";
+        }
+    };
+
+    // --- COMMUNICATION WITH ESP32 ---
 
     function sendToCart(itemName, action) {
         const ip = document.getElementById('espIp').value;
-        if (!ip) { alert("Please enter ESP32 IP first!"); return; }
+        if (!ip) { 
+            alert("Please enter ESP32 IP first!"); 
+            return; 
+        }
 
-        logDisplay.style.color = action === 'add' ? "#28a745" : "#dc3545";
+        logDisplay.style.color = "#007bff";
         logDisplay.innerText = action === 'add' ? `Adding ${itemName}...` : `Removing ${itemName}...`;
         
-        const img = new Image();
-        img.src = `http://${ip}/${action}?label=${encodeURIComponent(itemName)}&t=${Date.now()}`;
+        // Construct the URL for the ESP32 endpoint
+        // Example: http://192.168.1.50/add?label=Apple&t=123456789
+        const url = `http://${ip}/${action}?label=${encodeURIComponent(itemName)}&t=${Date.now()}`;
         
-        img.onload = img.onerror = () => {
-            if (action === 'add') {
-                logDisplay.innerText = "✅ Added: " + itemName;
-                lastAddedItem = itemName;
-            } else {
-                logDisplay.innerText = "🗑️ Removed: " + itemName;
-                lastAddedItem = null;
-            }
-        };
+        // Using 'no-cors' mode because ESP32 servers often don't handle CORS headers
+        fetch(url, { mode: 'no-cors' }) 
+            .then(() => {
+                if (action === 'add') {
+                    logDisplay.innerText = "✅ Added: " + itemName;
+                    logDisplay.style.color = "#28a745";
+                    lastAddedItem = itemName;
+                } else {
+                    logDisplay.innerText = "🗑️ Removed: " + itemName;
+                    logDisplay.style.color = "#dc3545";
+                }
+            })
+            .catch(err => {
+                logDisplay.innerText = "❌ Connection Error";
+                logDisplay.style.color = "#dc3545";
+                console.error("Fetch Error:", err);
+            });
     }
+
+    // Initialize
+    setupCamera();
+
 </script>
 </body>
 </html>
