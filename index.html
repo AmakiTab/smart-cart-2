@@ -48,7 +48,6 @@
     let classifier;
     let currentDetectedItem = null;
     let lastAddedItem = null;
-    // Ensure "Background" is NOT in this targets list
     const targets = ["Deodorant", "Grips", "Hot sauce", "Power bank"];
 
     const addBtn = document.getElementById('addBtn');
@@ -112,15 +111,14 @@
     }
 
     function updateUI(classifications) {
-        // Logic: Filter out 'Background' and find the highest actual item
         const itemResults = classifications
             .filter(res => targets.includes(res.label))
             .sort((a, b) => b.value - a.value);
             
         const topItem = itemResults[0];
         
-        // Update top display with the best non-background item if > 0.30
-        if (topItem && topItem.value > 0.3) {
+        // Always show the top target item regardless of confidence
+        if (topItem) {
              document.getElementById('top-result').innerText = `${topItem.label} (${(topItem.value * 100).toFixed(0)}%)`;
         } else {
              document.getElementById('top-result').innerText = `Searching...`;
@@ -136,14 +134,14 @@
         document.getElementById('conf-list').innerHTML = listHtml;
     }
 
-    // NEW LOGIC: Always selects the highest target item, ignoring background
     function checkDetection(classifications) {
-        // Find the best result among our target list (effectively ignoring background)
+        // Find the absolute highest scoring target item
         const bestItem = classifications
             .filter(res => targets.includes(res.label))
             .sort((a, b) => b.value - a.value)[0];
 
-        if (bestItem && bestItem.value >= 0.30) {
+        // NO THRESHOLD: If an item exists in the list, show the button
+        if (bestItem) {
             currentDetectedItem = bestItem.label;
             addBtn.style.display = 'block';
             addBtn.innerText = `➕ Add ${bestItem.label}`;
@@ -165,10 +163,10 @@
         
         img.onload = img.onerror = () => {
             if (action === 'add') {
-                logDisplay.innerText = "✅ Added to LCD: " + itemName;
+                logDisplay.innerText = "✅ Added: " + itemName;
                 lastAddedItem = itemName;
             } else {
-                logDisplay.innerText = "🗑️ Removed from LCD: " + itemName;
+                logDisplay.innerText = "🗑️ Removed: " + itemName;
                 lastAddedItem = null;
             }
         };
