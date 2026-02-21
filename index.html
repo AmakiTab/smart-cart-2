@@ -65,55 +65,52 @@
 
             // The main loop
             async function inferenceCycle() {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    const pixels = getPixelData(video, props.input_width, props.input_height);
-                    
-                    // DEBUG: If this shows up in your console, the loop is NOT frozen
-                    console.log("Processing frame. Pixel array length:", pixels.length);
-                    
-                    try {
-                        const result = await classifier.classify(pixels);
-                        if (result.results) {
-                            updateUI(result.results);
-                            check(result.results);
-                        }
-                    } catch (e) {
-                        console.error("Classification error:", e);
-                    }
-                }
-                // Use requestAnimationFrame for mobile stability
-                requestAnimationFrame(inferenceCycle);
-            }
-            inferenceCycle();
-        } catch (e) { log.innerText = "Error: " + e.message; }
-    }
-
-    function getPixelData(video, targetW, targetH) {
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d', { alpha: false });
-
-        // Center Crop logic
-        const s = Math.min(video.videoWidth, video.videoHeight);
-        const x = (video.videoWidth - s) / 2;
-        const y = (video.videoHeight - s) / 2;
-
-        ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
-        const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        const pixels = getPixelData(video, props.input_width, props.input_height);
         
-        const pixels = [];
-        for (let i = 0; i < imgData.length; i += 4) {
-            // TEST 1: If it's frozen, try raw integers first:
-            // pixels.push(imgData[i], imgData[i+1], imgData[i+2]);
-            
-            // TEST 2: If raw integers don't work, use normalization:
-            pixels.push(imgData[i] / 255.0);
-            pixels.push(imgData[i+1] / 255.0);
-            pixels.push(imgData[i+2] / 255.0);
+        try {
+            // Ensure pixels is a valid array before passing
+            if (pixels.length === (props.input_width * props.input_height * 3)) {
+                const result = await classifier.classify(pixels);
+                if (result.results) {
+                    updateUI(result.results);
+                    check(result.results);
+                }
+            }
+        } catch (e) {
+            console.error("Classification crashed:", e);
+            // If it crashes, stop the loop to prevent spamming the console
+            return; 
         }
-        return pixels;
     }
+    setTimeout(inferenceCycle, 250); 
+}
+    function getPixelData(video, targetW, targetH) {
+    if (!video.videoWidth) return [];
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d', { alpha: false });
+
+    // Center Crop logic
+    const s = Math.min(video.videoWidth, video.videoHeight);
+    const x = (video.videoWidth - s) / 2;
+    const y = (video.videoHeight - s) / 2;
+
+    ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
+    const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+    
+    const pixels = [];
+    for (let i = 0; i < imgData.length; i += 4) {
+        // CHANGE: Use raw integers (0-255) instead of dividing by 255.0
+        // This usually fixes the "memory access out of bounds" error
+        pixels.push(imgData[i]);     // Red
+        pixels.push(imgData[i + 1]); // Green
+        pixels.push(imgData[i + 2]); // Blue
+    }
+    return pixels;
+}
     function updateUI(results) {
         let html = "";
         let top = { label: 'Searching...', value: 0 };
