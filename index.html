@@ -56,7 +56,7 @@
         await initAI();
     };
 
-    async function initAI() {
+   async function initAI() {
         try {
             logDisplay.innerText = "Status: Initializing AI engine...";
             classifier = new EdgeImpulseClassifier();
@@ -71,61 +71,63 @@
             
             video.srcObject = stream;
             video.style.display = 'block';
-            await video.play();
 
-            logDisplay.innerText = "Status: Scanner Active";
-            
+            // Ensure we wait for the video to actually start playing
+            video.onloadedmetadata = () => {
+                video.play();
+                logDisplay.innerText = "Status: Scanner Active";
+                
+                // START THE LOOP HERE
+                inferenceCycle();
+            };
+
             async function inferenceCycle() {
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     const pixels = getPixelData(video, props.input_width, props.input_height);
-                    
                     try {
-                        // Crucial check to prevent memory access out of bounds
-                        if (pixels.length === (props.input_width * props.input_height * 3)) {
-                            const result = await classifier.classify(pixels);
-                            if (result.results) {
-                                updateUI(result.results);
-                                checkDetection(result.results);
-                            }
+                        const result = await classifier.classify(pixels);
+                        if (result.results) {
+                            updateUI(result.results);
+                            checkDetection(result.results);
                         }
                     } catch (e) {
-                        console.error("AI Crash:", e);
-                        logDisplay.innerText = "Status: AI Error - Check Console";
-                        return; // Stop loop if memory crash occurs
+                        console.error("Inference failed:", e);
                     }
                 }
-                // Using setTimeout for better mobile battery/thermal performance
-                setTimeout(inferenceCycle, 200); 
+                setTimeout(inferenceCycle, 150);
             }
-            inferenceCycle();
         } catch (e) { 
             logDisplay.innerText = "Status: Camera Error " + e.message; 
         }
     }
+    setTimeout(inferenceCycle, 150); // Faster refresh for better tracking
+}
 
-    function getPixelData(video, targetW, targetH) {
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d', { alpha: false });
+function getPixelData(video, targetW, targetH) {
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d', { alpha: false });
 
-        // Square Center Crop Logic
-        const s = Math.min(video.videoWidth, video.videoHeight);
-        const x = (video.videoWidth - s) / 2;
-        const y = (video.videoHeight - s) / 2;
+    const s = Math.min(video.videoWidth, video.videoHeight);
+    const x = (video.videoWidth - s) / 2;
+    const y = (video.videoHeight - s) / 2;
 
-        ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
-        const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
-        
-        const pixels = [];
-        for (let i = 0; i < imgData.length; i += 4) {
-            // Memory Fix: Using raw integers (0-255) instead of floats
-            pixels.push(imgData[i]);     // R
-            pixels.push(imgData[i + 1]); // G
-            pixels.push(imgData[i + 2]); // B
-        }
-        return pixels;
+    ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
+    const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+    
+    // 3. Create a Float32Array. This matches the memory structure 
+    // the WASM engine uses for "Normalized" models.
+    const pixels = new Float32Array(targetW * targetH * 3);
+    
+    let idx = 0;
+    for (let i = 0; i < imgData.length; i += 4) {
+        pixels[idx++] = imgData[i] / 255.0;     // Red
+        pixels[idx++] = imgData[i + 1] / 255.0; // Green
+        pixels[idx++] = imgData[i + 2] / 255.0; // Blue
     }
+    return pixels;
+}
 
     function updateUI(results) {
         let listHtml = "";
