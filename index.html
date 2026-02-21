@@ -225,39 +225,47 @@
 
 
 
-   function getPixelData(video, targetW, targetH) {
+  function getPixelData(video, targetW, targetH) {
     const canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
     const ctx = canvas.getContext('2d');
 
-    // Calculate dimensions for a center-crop square
-    let sourceX = 0;
-    let sourceY = 0;
-    let sourceWidth = video.videoWidth;
-    let sourceHeight = video.videoHeight;
+    // 1. Calculate Center Crop (Fit Shortest Axis)
+    const imgW = video.videoWidth;
+    const imgH = video.videoHeight;
+    let sX, sY, sW, sH;
 
-    if (sourceWidth > sourceHeight) {
-        sourceX = (sourceWidth - sourceHeight) / 2;
-        sourceWidth = sourceHeight;
+    if (imgW > imgH) {
+        // Landscape: Crop sides
+        sW = imgH;
+        sH = imgH;
+        sX = (imgW - imgH) / 2;
+        sY = 0;
     } else {
-        sourceY = (sourceHeight - sourceWidth) / 2;
-        sourceHeight = sourceWidth;
+        // Portrait: Crop top/bottom
+        sW = imgW;
+        sH = imgW;
+        sX = 0;
+        sY = (imgH - imgW) / 2;
     }
 
-    // Draw the square crop into the 160x160 canvas
-    ctx.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, targetW, targetH);
+    // 2. Draw the cropped square into our 160x160 target
+    ctx.drawImage(video, sX, sY, sW, sH, 0, 0, targetW, targetH);
     
+    // 3. Extract and Normalize Pixels (0-255 -> 0-1)
     const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
     const pixels = [];
     for (let i = 0; i < imgData.length; i += 4) {
-        pixels.push(imgData[i], imgData[i+1], imgData[i+2]);
+        // Edge Impulse Standalone SDK usually expects normalized floats
+        // If your standalone SDK handles normalization internally, 
+        // keep these as raw. But 90% of the time, this is the missing link.
+        pixels.push(imgData[i] / 255.0);
+        pixels.push(imgData[i+1] / 255.0);
+        pixels.push(imgData[i+2] / 255.0);
     }
     return pixels;
 }
-
-
-
     function updateUI(classifications) {
 
         const itemResults = classifications
@@ -304,39 +312,23 @@
 
 
 
-    function checkDetection(classifications) {
+   function checkDetection(classifications) {
+    const bestItem = classifications
+        .filter(res => targets.includes(res.label))
+        .sort((a, b) => b.value - a.value)[0];
 
-        const bestItem = classifications
-
-            .filter(res => targets.includes(res.label))
-
-            .sort((a, b) => b.value - a.value)[0];
-
-
-
-        // If the item is detected with more than 10% confidence
-
-        if (bestItem && bestItem.value > 0.1) {
-
-            currentDetectedItem = bestItem.label;
-
-            addBtn.style.display = 'block';
-
-            addBtn.innerText = `➕ Add ${bestItem.label}`;
-
-            removeBtn.innerText = `🔄 Remove ${bestItem.label}`;
-
-        } else {
-
-            currentDetectedItem = null;
-
-            addBtn.style.display = 'none';
-
-            removeBtn.innerText = `🔄 Remove Last Item`;
-
-        }
-
+    // High threshold (85%+) mimics the "clean" feeling of the official app
+    if (bestItem && bestItem.value > 0.85) {
+        currentDetectedItem = bestItem.label;
+        addBtn.style.display = 'block';
+        addBtn.innerText = `➕ Add ${bestItem.label}`;
+        removeBtn.innerText = `🔄 Remove ${bestItem.label}`;
+    } else {
+        currentDetectedItem = null;
+        addBtn.style.display = 'none';
+        removeBtn.innerText = `🔄 Remove Last Item`;
     }
+}
 
 
 
