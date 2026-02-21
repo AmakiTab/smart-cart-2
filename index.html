@@ -2,42 +2,54 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Smart Cart AI Scanner</title>
     <script src="edge-impulse-standalone.js"></script>
     <script src="run-impulse.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
+        body { font-family: -apple-system, sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
         .container { max-width: 420px; margin: auto; background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        video { width: 100%; border-radius: 15px; margin: 15px 0; display: none; border: 3px solid #007bff; }
-        .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; }
-        .bar-container { background: #ddd; height: 8px; border-radius: 4px; margin: 5px 0 12px 0; overflow: hidden; }
+        video { width: 100%; border-radius: 15px; margin: 15px 0; display: none; border: 3px solid #007bff; background: #000; }
+        .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; min-height: 32px; }
+        .bar-container { background: #ddd; height: 10px; border-radius: 5px; margin: 5px 0 15px 0; overflow: hidden; }
         .bar-fill { background: #007bff; height: 100%; width: 0%; transition: width 0.2s; }
         button { width: 100%; padding: 15px; background: #007bff; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
         .btn-add { background: #28a745; display: none; }
-        input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; }
+        .btn-remove { background: #dc3545; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; box-sizing: border-box; font-size: 16px; }
+        #log { margin-top: 15px; font-weight: bold; color: #666; font-size: 14px; }
+        .confidence-list { text-align: left; font-family: monospace; font-size: 14px; margin-top: 20px; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h2>🛒 Smart Cart AI</h2>
-    <input type="text" id="espIp" placeholder="ESP32 IP">
+    <input type="text" id="espIp" placeholder="Enter ESP32 IP (e.g. 192.168.1.50)">
     <button id="startBtn">Start AI Scanner</button>
     
     <video id="webcam" autoplay muted playsinline></video>
     <div id="top-result" class="inference-display">Standby</div>
     
-    <button id="addBtn" class="btn-add">➕ Add Item</button>
+    <div class="action-area">
+        <button id="addBtn" class="btn-add">➕ Add Item</button>
+        <button id="removeBtn" class="btn-remove">🔄 Remove Last Item</button>
+    </div>
 
-    <div id="conf-list" style="text-align: left; font-family: monospace; font-size: 14px;"></div>
-    <div id="log" style="margin-top:10px; color:#666;"></div>
+    <div id="conf-list" class="confidence-list"></div>
+    <div id="log">Status: Ready to start</div>
 </div>
 
 <script>
     let classifier;
+    let currentDetectedItem = null;
+    let lastAddedItem = null; 
     let detectionHistory = [];
     const targets = ["Deodorant", "Grips", "Hot sauce", "Power bank"];
+
+    const addBtn = document.getElementById('addBtn');
+    const removeBtn = document.getElementById('removeBtn');
+    const logDisplay = document.getElementById('log');
 
     document.getElementById('startBtn').onclick = async () => {
         document.getElementById('startBtn').style.display = 'none';
@@ -45,16 +57,14 @@
     };
 
     async function initAI() {
-        const log = document.getElementById('log');
         try {
-            log.innerText = "Initializing WASM...";
+            logDisplay.innerText = "Status: Initializing AI engine...";
             classifier = new EdgeImpulseClassifier();
             await classifier.init();
             
             const props = classifier.getProperties();
-            console.log("Model expects input size:", props.input_width, "x", props.input_height);
-
             const video = document.getElementById('webcam');
+            
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { facingMode: "environment", width: 640, height: 640 } 
             });
@@ -63,81 +73,116 @@
             video.style.display = 'block';
             await video.play();
 
-            // The main loop
+            logDisplay.innerText = "Status: Scanner Active";
+            
             async function inferenceCycle() {
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        const pixels = getPixelData(video, props.input_width, props.input_height);
-        
-        try {
-            // Ensure pixels is a valid array before passing
-            if (pixels.length === (props.input_width * props.input_height * 3)) {
-                const result = await classifier.classify(pixels);
-                if (result.results) {
-                    updateUI(result.results);
-                    check(result.results);
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    const pixels = getPixelData(video, props.input_width, props.input_height);
+                    
+                    try {
+                        // Crucial check to prevent memory access out of bounds
+                        if (pixels.length === (props.input_width * props.input_height * 3)) {
+                            const result = await classifier.classify(pixels);
+                            if (result.results) {
+                                updateUI(result.results);
+                                checkDetection(result.results);
+                            }
+                        }
+                    } catch (e) {
+                        console.error("AI Crash:", e);
+                        logDisplay.innerText = "Status: AI Error - Check Console";
+                        return; // Stop loop if memory crash occurs
+                    }
                 }
+                // Using setTimeout for better mobile battery/thermal performance
+                setTimeout(inferenceCycle, 200); 
             }
-        } catch (e) {
-            console.error("Classification crashed:", e);
-            // If it crashes, stop the loop to prevent spamming the console
-            return; 
+            inferenceCycle();
+        } catch (e) { 
+            logDisplay.innerText = "Status: Camera Error " + e.message; 
         }
     }
-    setTimeout(inferenceCycle, 250); 
-}
+
     function getPixelData(video, targetW, targetH) {
-    if (!video.videoWidth) return [];
-    
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d', { alpha: false });
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d', { alpha: false });
 
-    // Center Crop logic
-    const s = Math.min(video.videoWidth, video.videoHeight);
-    const x = (video.videoWidth - s) / 2;
-    const y = (video.videoHeight - s) / 2;
+        // Square Center Crop Logic
+        const s = Math.min(video.videoWidth, video.videoHeight);
+        const x = (video.videoWidth - s) / 2;
+        const y = (video.videoHeight - s) / 2;
 
-    ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
-    const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
-    
-    const pixels = [];
-    for (let i = 0; i < imgData.length; i += 4) {
-        // CHANGE: Use raw integers (0-255) instead of dividing by 255.0
-        // This usually fixes the "memory access out of bounds" error
-        pixels.push(imgData[i]);     // Red
-        pixels.push(imgData[i + 1]); // Green
-        pixels.push(imgData[i + 2]); // Blue
+        ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
+        const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+        
+        const pixels = [];
+        for (let i = 0; i < imgData.length; i += 4) {
+            // Memory Fix: Using raw integers (0-255) instead of floats
+            pixels.push(imgData[i]);     // R
+            pixels.push(imgData[i + 1]); // G
+            pixels.push(imgData[i + 2]); // B
+        }
+        return pixels;
     }
-    return pixels;
-}
+
     function updateUI(results) {
-        let html = "";
+        let listHtml = "";
         let top = { label: 'Searching...', value: 0 };
+
         results.forEach(res => {
             if (res.value > top.value) top = res;
             const p = (res.value * 100).toFixed(0);
-            html += `<div>${res.label}: ${p}%<div class="bar-container"><div class="bar-fill" style="width: ${p}%"></div></div></div>`;
+            const isTarget = targets.includes(res.label);
+            listHtml += `<div><span>${res.label}: ${p}%</span>
+                <div class="bar-container"><div class="bar-fill" style="width: ${p}%; background: ${isTarget ? "#007bff" : "#6c757d"};"></div></div></div>`;
         });
+
         document.getElementById('top-result').innerText = top.value > 0.5 ? `${top.label} (${(top.value*100).toFixed(0)}%)` : "Searching...";
-        document.getElementById('conf-list').innerHTML = html;
+        document.getElementById('conf-list').innerHTML = listHtml;
     }
 
-    function check(results) {
+    function checkDetection(results) {
         const best = results.filter(r => targets.includes(r.label)).sort((a,b) => b.value - a.value)[0];
-        const addBtn = document.getElementById('addBtn');
         
-        // Use 80% to match your successful Power Bank reading
-        const found = (best && best.value > 0.8) ? best.label : null;
-        detectionHistory.push(found);
+        // Smoothing: Require 80% confidence across 3 of last 5 frames
+        const isFound = best && best.value > 0.8;
+        detectionHistory.push(isFound ? best.label : null);
         if (detectionHistory.length > 5) detectionHistory.shift();
+        
+        const count = detectionHistory.filter(x => x === best?.label).length;
 
-        if (found && detectionHistory.filter(x => x === best.label).length >= 3) {
+        if (isFound && count >= 3) {
+            currentDetectedItem = best.label;
             addBtn.style.display = 'block';
-            addBtn.innerText = `➕ Add ${found}`;
+            addBtn.innerText = `➕ Add ${best.label}`;
         } else {
+            currentDetectedItem = null;
             addBtn.style.display = 'none';
         }
+    }
+
+    addBtn.onclick = () => { if (currentDetectedItem) sendToCart(currentDetectedItem, 'add'); };
+    removeBtn.onclick = () => {
+        const itemToRemove = currentDetectedItem || lastAddedItem;
+        if (itemToRemove) sendToCart(itemToRemove, 'remove');
+        else alert("No item found to remove!");
+    };
+
+    function sendToCart(itemName, action) {
+        const ip = document.getElementById('espIp').value;
+        if (!ip) return alert("Please enter ESP32 IP!");
+        
+        logDisplay.style.color = action === 'add' ? "#28a745" : "#dc3545";
+        logDisplay.innerText = `Status: ${action === 'add' ? 'Adding' : 'Removing'} ${itemName}...`;
+        
+        const img = new Image();
+        img.src = `http://${ip}/${action}?label=${encodeURIComponent(itemName)}&t=${Date.now()}`;
+        img.onload = img.onerror = () => {
+            logDisplay.innerText = `Status: Successfully ${action === 'add' ? 'added' : 'removed'} ${itemName}`;
+            if (action === 'add') lastAddedItem = itemName;
+        };
     }
 </script>
 </body>
