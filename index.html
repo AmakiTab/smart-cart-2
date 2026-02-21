@@ -179,10 +179,13 @@
             const video = document.getElementById('webcam');
 
             const stream = await navigator.mediaDevices.getUserMedia({ 
-
-                video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } } 
-
-            });
+    video: { 
+        facingMode: "environment", 
+        width: { ideal: 1080 }, // Higher source resolution
+        height: { ideal: 1080 },
+        aspectRatio: 1 // Force square if possible to match model
+    } 
+});
 
             
 
@@ -222,31 +225,32 @@
 
 
 
-    function getPixelData(video, targetW, targetH) {
+   function getPixelData(video, targetW, targetH) {
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
 
-        const canvas = document.createElement('canvas');
+    // "Fit shortest axis" logic
+    const imgW = video.videoWidth;
+    const imgH = video.videoHeight;
+    const ratio = Math.max(targetW / imgW, targetH / imgH);
+    const newW = imgW * ratio;
+    const newH = imgH * ratio;
+    const x = (targetW - newW) / 2;
+    const y = (targetH - newH) / 2;
 
-        canvas.width = targetW; canvas.height = targetH;
-
-        const ctx = canvas.getContext('2d');
-
-        const size = Math.min(video.videoWidth, video.videoHeight);
-
-        const xOffset = (video.videoWidth - size) / 2;
-
-        const yOffset = (video.videoHeight - size) / 2;
-
-        ctx.drawImage(video, xOffset, yOffset, size, size, 0, 0, targetW, targetH);
-
-        const img = ctx.getImageData(0, 0, targetW, targetH).data;
-
-        const pixels = [];
-
-        for (let i = 0; i < img.length; i += 4) { pixels.push(img[i], img[i+1], img[i+2]); }
-
-        return pixels;
-
+    ctx.drawImage(video, x, y, newW, newH);
+    
+    // Get raw data and convert to the format Edge Impulse SDK expects
+    const imageData = ctx.getImageData(0, 0, targetW, targetH).data;
+    const pixels = [];
+    for (let i = 0; i < imageData.length; i += 4) {
+        // Edge Impulse models usually expect RGB flattened 
+        pixels.push(imageData[i], imageData[i+1], imageData[i+2]);
     }
+    return pixels;
+}
 
 
 
