@@ -52,8 +52,9 @@
             await classifier.init();
             
             const props = classifier.getProperties();
+            console.log("Model expects input size:", props.input_width, "x", props.input_height);
+
             const video = document.getElementById('webcam');
-            
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { facingMode: "environment", width: 640, height: 640 } 
             });
@@ -62,14 +63,13 @@
             video.style.display = 'block';
             await video.play();
 
-            log.innerText = "AI Running...";
-            
-            // Replaced setInterval with a self-calling async function to prevent UI locking
+            // The main loop
             async function inferenceCycle() {
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     const pixels = getPixelData(video, props.input_width, props.input_height);
                     
-                    // console.log("Input Data Size:", pixels.length); // Should be 160*160*3 = 76800
+                    // DEBUG: If this shows up in your console, the loop is NOT frozen
+                    console.log("Processing frame. Pixel array length:", pixels.length);
                     
                     try {
                         const result = await classifier.classify(pixels);
@@ -81,7 +81,8 @@
                         console.error("Classification error:", e);
                     }
                 }
-                setTimeout(inferenceCycle, 200); 
+                // Use requestAnimationFrame for mobile stability
+                requestAnimationFrame(inferenceCycle);
             }
             inferenceCycle();
         } catch (e) { log.innerText = "Error: " + e.message; }
@@ -93,7 +94,7 @@
         canvas.height = targetH;
         const ctx = canvas.getContext('2d', { alpha: false });
 
-        // Official Client Crop Logic: Fit shortest axis
+        // Center Crop logic
         const s = Math.min(video.videoWidth, video.videoHeight);
         const x = (video.videoWidth - s) / 2;
         const y = (video.videoHeight - s) / 2;
@@ -103,14 +104,16 @@
         
         const pixels = [];
         for (let i = 0; i < imgData.length; i += 4) {
-            // Trying 0-1 Normalization (Standard for EI Mobile Client)
+            // TEST 1: If it's frozen, try raw integers first:
+            // pixels.push(imgData[i], imgData[i+1], imgData[i+2]);
+            
+            // TEST 2: If raw integers don't work, use normalization:
             pixels.push(imgData[i] / 255.0);
             pixels.push(imgData[i+1] / 255.0);
             pixels.push(imgData[i+2] / 255.0);
         }
         return pixels;
     }
-
     function updateUI(results) {
         let html = "";
         let top = { label: 'Searching...', value: 0 };
