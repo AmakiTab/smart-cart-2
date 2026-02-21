@@ -1,381 +1,216 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>Smart Cart AI Scanner</title>
-
     <script src="edge-impulse-standalone.js"></script>
-
     <script src="run-impulse.js"></script>
-
     <style>
-
         body { font-family: sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
-
         .container { max-width: 450px; margin: auto; background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-
         video { width: 100%; border-radius: 15px; margin: 15px 0; display: none; border: 3px solid #007bff; }
-
         .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; min-height: 32px; }
-
         .confidence-list { text-align: left; font-family: monospace; background: #e9ecef; padding: 15px; border-radius: 10px; font-size: 14px; line-height: 1.6; }
-
         input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; }
-
-        
-
         button { width: 100%; padding: 15px; background: #007bff; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
-
         button:active { background: #0056b3; }
-
         .btn-add { background: #28a745; display: none; margin-top: 10px; }
-
         .btn-remove { background: #dc3545; }
-
-        
-
         #log { color: #28a745; font-weight: bold; margin-top: 10px; height: 20px; }
-
         .bar-container { background: #ddd; height: 8px; border-radius: 4px; margin-top: 4px; margin-bottom: 8px; overflow: hidden; }
-
         .bar-fill { background: #007bff; height: 100%; transition: width 0.2s; }
-
         .action-area { margin: 20px 0; padding-top: 10px; border-top: 2px solid #eee; }
-
     </style>
-
 </head>
-
 <body>
 
-
-
 <div class="container">
-
     <h2>🛒 Smart Cart AI</h2>
-
     <input type="text" id="espIp" placeholder="Enter ESP32 IP (e.g. 192.168.1.50)">
-
     <button id="startBtn">Start Inferencing...</button>
-
     
-
     <video id="webcam" autoplay muted playsinline></video>
-
     <div id="top-result" class="inference-display">Ready...</div>
-
     
-
     <div class="action-area">
-
         <button id="addBtn" class="btn-add">➕ Add Detected Item</button>
-
         <button id="removeBtn" class="btn-remove">🔄 Remove Item</button>
-
     </div>
 
-
-
     <div id="conf-list" class="confidence-list"></div>
-
     <div id="log">Last Action: None</div>
-
 </div>
 
-
-
 <script>
-
     let classifier;
-
     let currentDetectedItem = null;
-
     let lastAddedItem = null; 
-
+    let detectionHistory = []; // For smoothing out "flickering"
     const targets = ["Deodorant", "Grips", "Hot sauce", "Power bank"];
 
-
-
     const addBtn = document.getElementById('addBtn');
-
     const removeBtn = document.getElementById('removeBtn');
-
     const logDisplay = document.getElementById('log');
 
-
-
     document.getElementById('startBtn').onclick = async () => {
-
         document.getElementById('startBtn').style.display = 'none';
-
         await initAI();
-
     };
 
-
-
-    // ADD: Sends the currently seen item to the ESP32
-
-    addBtn.onclick = () => { 
-
-        if (currentDetectedItem) {
-
-            sendToCart(currentDetectedItem, 'add'); 
-
-        } 
-
-    };
-
-
-
-    // REMOVE: Sends the currently seen item (or last added) to the ESP32 to subtract price
+    addBtn.onclick = () => { if (currentDetectedItem) sendToCart(currentDetectedItem, 'add'); };
 
     removeBtn.onclick = () => {
-
         if (currentDetectedItem) {
-
             sendToCart(currentDetectedItem, 'remove');
-
         } else if (lastAddedItem) {
-
-            // Fallback to last added if camera doesn't see anything right now
-
             sendToCart(lastAddedItem, 'remove');
-
         } else {
-
             logDisplay.innerText = "No item detected to remove!"; 
-
             logDisplay.style.color = "#dc3545"; 
-
         }
-
     };
 
-
-
     async function initAI() {
-
         const statusDisplay = document.getElementById('top-result');
-
         try {
-
             statusDisplay.innerText = "Loading AI...";
-
             classifier = new EdgeImpulseClassifier();
-
             await classifier.init();
-
             
-
             const props = classifier.getProperties();
-
             const video = document.getElementById('webcam');
-
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-    video: { 
-        facingMode: "environment", 
-        width: { ideal: 1080 }, // Higher source resolution
-        height: { ideal: 1080 },
-        aspectRatio: 1 // Force square if possible to match model
-    } 
-});
-
             
-
+            // iPhone optimization: requesting high res to ensure center-crop has enough data
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: "environment", 
+                    width: { ideal: 1080 }, 
+                    height: { ideal: 1080 } 
+                } 
+            });
+            
             video.srcObject = stream;
-
             video.style.display = 'block';
 
-
-
             video.onloadedmetadata = () => {
-
                 video.play();
-
                 statusDisplay.innerText = "Searching...";
-
                 setInterval(async () => {
-
                     const imgData = getPixelData(video, props.input_width, props.input_height);
-
                     const result = await classifier.classify(imgData);
-
                     if (result.results) {
-
                         updateUI(result.results);
-
                         checkDetection(result.results);
-
                     }
-
-                }, 600);
-
+                }, 400); // Slightly faster inference interval
             };
-
         } catch (e) { statusDisplay.innerText = "AI Error: " + e.message; }
-
     }
 
+    function getPixelData(video, targetW, targetH) {
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
 
+        const imgW = video.videoWidth;
+        const imgH = video.videoHeight;
+        let sX, sY, sW, sH;
 
-  function getPixelData(video, targetW, targetH) {
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-
-    // 1. Calculate Center Crop (Fit Shortest Axis)
-    const imgW = video.videoWidth;
-    const imgH = video.videoHeight;
-    let sX, sY, sW, sH;
-
-    if (imgW > imgH) {
-        // Landscape: Crop sides
-        sW = imgH;
-        sH = imgH;
-        sX = (imgW - imgH) / 2;
-        sY = 0;
-    } else {
-        // Portrait: Crop top/bottom
-        sW = imgW;
-        sH = imgW;
-        sX = 0;
-        sY = (imgH - imgW) / 2;
-    }
-
-    // 2. Draw the cropped square into our 160x160 target
-    ctx.drawImage(video, sX, sY, sW, sH, 0, 0, targetW, targetH);
-    
-    // 3. Extract and Normalize Pixels (0-255 -> 0-1)
-    const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
-    const pixels = [];
-    for (let i = 0; i < imgData.length; i += 4) {
-        // Edge Impulse Standalone SDK usually expects normalized floats
-        // If your standalone SDK handles normalization internally, 
-        // keep these as raw. But 90% of the time, this is the missing link.
-        pixels.push(imgData[i] / 255.0);
-        pixels.push(imgData[i+1] / 255.0);
-        pixels.push(imgData[i+2] / 255.0);
-    }
-    return pixels;
-}
-    function updateUI(classifications) {
-
-        const itemResults = classifications
-
-            .filter(res => targets.includes(res.label))
-
-            .sort((a, b) => b.value - a.value);
-
-            
-
-        const topItem = itemResults[0];
-
-        
-
-        if (topItem && topItem.value > 0.05) {
-
-             document.getElementById('top-result').innerText = `${topItem.label} (${(topItem.value * 100).toFixed(0)}%)`;
-
+        // "Fit shortest axis" center-crop logic
+        if (imgW > imgH) {
+            sW = imgH; sH = imgH;
+            sX = (imgW - imgH) / 2; sY = 0;
         } else {
-
-             document.getElementById('top-result').innerText = `Searching...`;
-
+            sW = imgW; sH = imgW;
+            sX = 0; sY = (imgH - imgW) / 2;
         }
 
+        ctx.drawImage(video, sX, sY, sW, sH, 0, 0, targetW, targetH);
+        
+        const imgRaw = ctx.getImageData(0, 0, targetW, targetH).data;
+        const pixels = [];
+        for (let i = 0; i < imgRaw.length; i += 4) {
+            // NORMALIZATION: Scaling 0-255 to 0.0-1.0
+            pixels.push(imgRaw[i] / 255.0);
+            pixels.push(imgRaw[i+1] / 255.0);
+            pixels.push(imgRaw[i+2] / 255.0);
+        }
+        return pixels;
+    }
 
+    function updateUI(classifications) {
+        const itemResults = classifications
+            .filter(res => targets.includes(res.label))
+            .sort((a, b) => b.value - a.value);
+            
+        const topItem = itemResults[0];
+        
+        // Only show text if confidence is decent, otherwise show "Searching"
+        if (topItem && topItem.value > 0.40) {
+             document.getElementById('top-result').innerText = `${topItem.label} (${(topItem.value * 100).toFixed(0)}%)`;
+        } else {
+             document.getElementById('top-result').innerText = `Searching...`;
+        }
 
         let listHtml = "";
-
         classifications.sort((a, b) => b.value - a.value).forEach(res => {
-
             const percent = (res.value * 100).toFixed(0);
-
             const isTarget = targets.includes(res.label);
-
             listHtml += `<div><span>${res.label}: ${percent}%</span>
-
                 <div class="bar-container"><div class="bar-fill" style="width: ${percent}%; background: ${isTarget ? "#007bff" : "#6c757d"};"></div></div></div>`;
-
         });
-
         document.getElementById('conf-list').innerHTML = listHtml;
-
     }
 
+    function checkDetection(classifications) {
+        const bestItem = classifications
+            .filter(res => targets.includes(res.label))
+            .sort((a, b) => b.value - a.value)[0];
 
+        // ADD TO HISTORY for smoothing (last 5 frames)
+        // If best item is under 80% confidence, we count this frame as "Nothing"
+        detectionHistory.push(bestItem && bestItem.value > 0.80 ? bestItem.label : null);
+        if (detectionHistory.length > 5) detectionHistory.shift();
 
-   function checkDetection(classifications) {
-    const bestItem = classifications
-        .filter(res => targets.includes(res.label))
-        .sort((a, b) => b.value - a.value)[0];
+        // COUNT occurrences in history
+        const occurrences = detectionHistory.filter(x => x === bestItem?.label).length;
 
-    // High threshold (85%+) mimics the "clean" feeling of the official app
-    if (bestItem && bestItem.value > 0.85) {
-        currentDetectedItem = bestItem.label;
-        addBtn.style.display = 'block';
-        addBtn.innerText = `➕ Add ${bestItem.label}`;
-        removeBtn.innerText = `🔄 Remove ${bestItem.label}`;
-    } else {
-        currentDetectedItem = null;
-        addBtn.style.display = 'none';
-        removeBtn.innerText = `🔄 Remove Last Item`;
+        // Require 3 out of 5 frames to match before showing the button
+        if (bestItem && bestItem.value > 0.80 && occurrences >= 3) {
+            currentDetectedItem = bestItem.label;
+            addBtn.style.display = 'block';
+            addBtn.innerText = `➕ Add ${bestItem.label}`;
+            removeBtn.innerText = `🔄 Remove ${bestItem.label}`;
+        } else {
+            currentDetectedItem = null;
+            addBtn.style.display = 'none';
+            removeBtn.innerText = `🔄 Remove Last Item`;
+        }
     }
-}
-
-
 
     function sendToCart(itemName, action) {
-
         const ip = document.getElementById('espIp').value;
-
         if (!ip) { alert("Please enter ESP32 IP first!"); return; }
 
-
-
         logDisplay.style.color = action === 'add' ? "#28a745" : "#dc3545";
-
         logDisplay.innerText = (action === 'add' ? "Adding " : "Removing ") + itemName + "...";
-
         
-
-        // Use an Image object to trigger the GET request to the ESP32 (avoids CORS issues)
-
         const img = new Image();
-
         img.src = `http://${ip}/${action}?label=${encodeURIComponent(itemName)}&t=${Date.now()}`;
-
         
-
         img.onload = img.onerror = () => {
-
             if (action === 'add') {
-
                 logDisplay.innerText = "✅ Added: " + itemName;
-
                 lastAddedItem = itemName;
-
             } else {
-
                 logDisplay.innerText = "🗑️ Removed: " + itemName;
-
                 if (lastAddedItem === itemName) lastAddedItem = null;
-
             }
-
         };
-
     }
-
 </script>
 
 </body>
-
 </html>
