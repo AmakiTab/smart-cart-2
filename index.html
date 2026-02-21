@@ -231,23 +231,27 @@
     canvas.height = targetH;
     const ctx = canvas.getContext('2d');
 
-    // "Fit shortest axis" logic
-    const imgW = video.videoWidth;
-    const imgH = video.videoHeight;
-    const ratio = Math.max(targetW / imgW, targetH / imgH);
-    const newW = imgW * ratio;
-    const newH = imgH * ratio;
-    const x = (targetW - newW) / 2;
-    const y = (targetH - newH) / 2;
+    // Calculate dimensions for a center-crop square
+    let sourceX = 0;
+    let sourceY = 0;
+    let sourceWidth = video.videoWidth;
+    let sourceHeight = video.videoHeight;
 
-    ctx.drawImage(video, x, y, newW, newH);
+    if (sourceWidth > sourceHeight) {
+        sourceX = (sourceWidth - sourceHeight) / 2;
+        sourceWidth = sourceHeight;
+    } else {
+        sourceY = (sourceHeight - sourceWidth) / 2;
+        sourceHeight = sourceWidth;
+    }
+
+    // Draw the square crop into the 160x160 canvas
+    ctx.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, targetW, targetH);
     
-    // Get raw data and convert to the format Edge Impulse SDK expects
-    const imageData = ctx.getImageData(0, 0, targetW, targetH).data;
+    const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
     const pixels = [];
-    for (let i = 0; i < imageData.length; i += 4) {
-        // Edge Impulse models usually expect RGB flattened 
-        pixels.push(imageData[i], imageData[i+1], imageData[i+2]);
+    for (let i = 0; i < imgData.length; i += 4) {
+        pixels.push(imgData[i], imgData[i+1], imgData[i+2]);
     }
     return pixels;
 }
