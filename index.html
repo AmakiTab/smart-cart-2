@@ -8,44 +8,36 @@
     <script src="run-impulse.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
-        .container { max-width: 450px; margin: auto; background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .container { max-width: 420px; margin: auto; background: white; padding: 20px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         video { width: 100%; border-radius: 15px; margin: 15px 0; display: none; border: 3px solid #007bff; }
-        .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; min-height: 32px; }
-        .confidence-list { text-align: left; font-family: monospace; background: #e9ecef; padding: 15px; border-radius: 10px; font-size: 14px; line-height: 1.6; }
-        input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; }
+        .inference-display { font-size: 24px; font-weight: bold; color: #007bff; margin: 15px 0; }
+        .bar-container { background: #ddd; height: 8px; border-radius: 4px; margin: 5px 0 12px 0; overflow: hidden; }
+        .bar-fill { background: #007bff; height: 100%; width: 0%; transition: width 0.2s; }
         button { width: 100%; padding: 15px; background: #007bff; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
-        .btn-add { background: #28a745; display: none; margin-top: 10px; }
-        .btn-remove { background: #dc3545; }
-        #log { color: #28a745; font-weight: bold; margin-top: 10px; height: 20px; }
-        .bar-container { background: #ddd; height: 8px; border-radius: 4px; margin-top: 4px; margin-bottom: 8px; overflow: hidden; }
-        .bar-fill { background: #007bff; height: 100%; transition: width 0.2s; }
+        .btn-add { background: #28a745; display: none; }
+        input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h2>🛒 Smart Cart AI</h2>
-    <input type="text" id="espIp" placeholder="Enter ESP32 IP">
-    <button id="startBtn">Start Inferencing...</button>
+    <input type="text" id="espIp" placeholder="ESP32 IP">
+    <button id="startBtn">Start AI Scanner</button>
+    
     <video id="webcam" autoplay muted playsinline></video>
-    <div id="top-result" class="inference-display">Ready...</div>
-    <div class="action-area">
-        <button id="addBtn" class="btn-add">➕ Add Detected Item</button>
-        <button id="removeBtn" class="btn-remove">🔄 Remove Item</button>
-    </div>
-    <div id="conf-list" class="confidence-list"></div>
-    <div id="log">Last Action: None</div>
+    <div id="top-result" class="inference-display">Standby</div>
+    
+    <button id="addBtn" class="btn-add">➕ Add Item</button>
+
+    <div id="conf-list" style="text-align: left; font-family: monospace; font-size: 14px;"></div>
+    <div id="log" style="margin-top:10px; color:#666;"></div>
 </div>
 
 <script>
     let classifier;
-    let currentDetectedItem = null;
-    let lastAddedItem = null; 
     let detectionHistory = [];
     const targets = ["Deodorant", "Grips", "Hot sauce", "Power bank"];
-
-    const addBtn = document.getElementById('addBtn');
-    const removeBtn = document.getElementById('removeBtn');
 
     document.getElementById('startBtn').onclick = async () => {
         document.getElementById('startBtn').style.display = 'none';
@@ -53,65 +45,65 @@
     };
 
     async function initAI() {
-        const statusDisplay = document.getElementById('top-result');
+        const log = document.getElementById('log');
         try {
-            statusDisplay.innerText = "Loading AI...";
+            log.innerText = "Initializing WASM...";
             classifier = new EdgeImpulseClassifier();
             await classifier.init();
             
             const props = classifier.getProperties();
             const video = document.getElementById('webcam');
             
-            // Get camera with square-ish constraints for iPhone
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 640 } } 
+                video: { facingMode: "environment", width: 640, height: 640 } 
             });
             
             video.srcObject = stream;
             video.style.display = 'block';
+            await video.play();
 
-            video.onloadedmetadata = () => {
-                video.play();
-                statusDisplay.innerText = "Ready...";
-                
-                // Inference Loop
-                async function run() {
+            log.innerText = "AI Running...";
+            
+            // Replaced setInterval with a self-calling async function to prevent UI locking
+            async function inferenceCycle() {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     const pixels = getPixelData(video, props.input_width, props.input_height);
-                    if (pixels.length > 0) {
-                        try {
-                            const result = await classifier.classify(pixels);
-                            if (result.results) {
-                                updateUI(result.results);
-                                checkDetection(result.results);
-                            }
-                        } catch (e) { console.error("Classification error", e); }
+                    
+                    // console.log("Input Data Size:", pixels.length); // Should be 160*160*3 = 76800
+                    
+                    try {
+                        const result = await classifier.classify(pixels);
+                        if (result.results) {
+                            updateUI(result.results);
+                            check(result.results);
+                        }
+                    } catch (e) {
+                        console.error("Classification error:", e);
                     }
-                    setTimeout(run, 250); // Scan 4 times per second
                 }
-                run();
-            };
-        } catch (e) { statusDisplay.innerText = "AI Error: " + e.message; }
+                setTimeout(inferenceCycle, 200); 
+            }
+            inferenceCycle();
+        } catch (e) { log.innerText = "Error: " + e.message; }
     }
 
     function getPixelData(video, targetW, targetH) {
-        if (!video.videoWidth) return [];
         const canvas = document.createElement('canvas');
         canvas.width = targetW;
         canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { alpha: false });
 
-        // Center Crop (Fit Shortest Axis)
-        const size = Math.min(video.videoWidth, video.videoHeight);
-        const x = (video.videoWidth - size) / 2;
-        const y = (video.videoHeight - size) / 2;
+        // Official Client Crop Logic: Fit shortest axis
+        const s = Math.min(video.videoWidth, video.videoHeight);
+        const x = (video.videoWidth - s) / 2;
+        const y = (video.videoHeight - s) / 2;
 
-        ctx.drawImage(video, x, y, size, size, 0, 0, targetW, targetH);
+        ctx.drawImage(video, x, y, s, s, 0, 0, targetW, targetH);
         const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
         
         const pixels = [];
         for (let i = 0; i < imgData.length; i += 4) {
-            // NORMALIZATION: Try / 255.0 first. 
-            // If the bars are STILL frozen, remove the "/ 255.0"
+            // Trying 0-1 Normalization (Standard for EI Mobile Client)
             pixels.push(imgData[i] / 255.0);
             pixels.push(imgData[i+1] / 255.0);
             pixels.push(imgData[i+2] / 255.0);
@@ -120,54 +112,32 @@
     }
 
     function updateUI(results) {
-        let listHtml = "";
+        let html = "";
         let top = { label: 'Searching...', value: 0 };
-
         results.forEach(res => {
             if (res.value > top.value) top = res;
-            const percent = (res.value * 100).toFixed(0);
-            const isTarget = targets.includes(res.label);
-            listHtml += `<div><span>${res.label}: ${percent}%</span>
-                <div class="bar-container"><div class="bar-fill" style="width: ${percent}%; background: ${isTarget ? "#007bff" : "#6c757d"};"></div></div></div>`;
+            const p = (res.value * 100).toFixed(0);
+            html += `<div>${res.label}: ${p}%<div class="bar-container"><div class="bar-fill" style="width: ${p}%"></div></div></div>`;
         });
-
         document.getElementById('top-result').innerText = top.value > 0.5 ? `${top.label} (${(top.value*100).toFixed(0)}%)` : "Searching...";
-        document.getElementById('conf-list').innerHTML = listHtml;
+        document.getElementById('conf-list').innerHTML = html;
     }
 
-    function checkDetection(results) {
+    function check(results) {
         const best = results.filter(r => targets.includes(r.label)).sort((a,b) => b.value - a.value)[0];
+        const addBtn = document.getElementById('addBtn');
         
-        // Use 80% threshold to ignore background "noise"
-        const isFound = best && best.value > 0.8;
-        detectionHistory.push(isFound ? best.label : null);
+        // Use 80% to match your successful Power Bank reading
+        const found = (best && best.value > 0.8) ? best.label : null;
+        detectionHistory.push(found);
         if (detectionHistory.length > 5) detectionHistory.shift();
-        
-        const count = detectionHistory.filter(x => x === best?.label).length;
 
-        if (isFound && count >= 3) {
-            currentDetectedItem = best.label;
+        if (found && detectionHistory.filter(x => x === best.label).length >= 3) {
             addBtn.style.display = 'block';
-            addBtn.innerText = `➕ Add ${best.label}`;
+            addBtn.innerText = `➕ Add ${found}`;
         } else {
-            currentDetectedItem = null;
             addBtn.style.display = 'none';
         }
-    }
-
-    function sendToCart(itemName, action) {
-        const ip = document.getElementById('espIp').value;
-        if (!ip) return alert("Enter ESP32 IP!");
-        
-        const log = document.getElementById('log');
-        log.innerText = `${action === 'add' ? 'Adding' : 'Removing'} ${itemName}...`;
-        
-        const img = new Image();
-        img.src = `http://${ip}/${action}?label=${encodeURIComponent(itemName)}&t=${Date.now()}`;
-        img.onload = img.onerror = () => {
-            log.innerText = `✅ ${action === 'add' ? 'Added' : 'Removed'}: ${itemName}`;
-            if (action === 'add') lastAddedItem = itemName;
-        };
     }
 </script>
 </body>
